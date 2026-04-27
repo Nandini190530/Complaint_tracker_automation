@@ -1,3 +1,4 @@
+USER_EMAIL = "065038@fsm.ac.in"
 import requests
 import pandas as pd
 import hashlib
@@ -33,7 +34,7 @@ def get_access_token():
 
 
 def download_excel(token):
-    url = f"https://graph.microsoft.com/v1.0/me/drive/root:{EXCEL_FILE_PATH}:/content"
+    url = f"https://graph.microsoft.com/v1.0/users/{USER_EMAIL}/drive/root::{EXCEL_FILE_PATH}:/content"
     headers = {"Authorization": f"Bearer {token}"}
 
     r = requests.get(url, headers=headers)
@@ -46,7 +47,7 @@ def download_excel(token):
 
 
 def upload_excel(token):
-    url = f"https://graph.microsoft.com/v1.0/me/drive/root:{EXCEL_FILE_PATH}:/content"
+    url = f"https://graph.microsoft.com/v1.0//users/{USER_EMAIL}/drive/root:t:{EXCEL_FILE_PATH}:/content"
     headers = {"Authorization": f"Bearer {token}"}
 
     with open("data.xlsx", "rb") as f:
