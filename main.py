@@ -34,10 +34,13 @@ def get_access_token():
 
 
 def download_excel(token):
-    url = f"https://graph.microsoft.com/v1.0/users/{USER_EMAIL}/drive/root::{EXCEL_FILE_PATH}:/content"
+    url = f"https://graph.microsoft.com/v1.0/users/{USER_EMAIL}/drive/root:{EXCEL_FILE_PATH}:/content"
     headers = {"Authorization": f"Bearer {token}"}
 
     r = requests.get(url, headers=headers)
+
+    print("Download status:", r.status_code)
+    print("Download response:", r.text)
 
     if r.status_code == 200:
         with open("data.xlsx", "wb") as f:
@@ -45,13 +48,19 @@ def download_excel(token):
         return True
     return False
 
-
 def upload_excel(token):
-    url = f"https://graph.microsoft.com/v1.0//users/{USER_EMAIL}/drive/root:t:{EXCEL_FILE_PATH}:/content"
-    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://graph.microsoft.com/v1.0/users/{USER_EMAIL}/drive/root:{EXCEL_FILE_PATH}:/content"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    }
 
     with open("data.xlsx", "rb") as f:
-        requests.put(url, headers=headers, data=f)
+        response = requests.put(url, headers=headers, data=f)
+
+    print("Upload status:", response.status_code)
+    print("Upload response:", response.text)
 
 
 # =========================
