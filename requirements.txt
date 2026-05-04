@@ -1,5 +1,8 @@
-pandas
 google-api-python-client
+google-auth
+google-genai
 vaderSentiment
 openpyxl
+pandas
+numpy
 requests
