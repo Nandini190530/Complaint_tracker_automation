@@ -25,7 +25,7 @@ YOUTUBE_API_KEY   = os.getenv("YOUTUBE_API_KEY",   "PASTE_YOUR_YOUTUBE_KEY")
 GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY",    "PASTE_YOUR_GEMINI_KEY")
 GDRIVE_CREDENTIALS = os.getenv("GDRIVE_CREDENTIALS", "")  # JSON string from GitHub Secret
 
-LOCAL_FILE = "data.xlsx"
+LOCAL_FILE = "FINAL_STRUCTURED_COMPLAINTS.xlsx"
 
 # ── SETUP APIs ───────────────────────────────────────────
 youtube  = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
@@ -171,20 +171,24 @@ def get_drive_service():
 
 
 def find_file_id(service, filename=LOCAL_FILE):
-    """Finds file on Google Drive by name"""
     results = service.files().list(
         q=f"name='{filename}' and trashed=false",
         fields="files(id, name, modifiedTime)",
-        pageSize=5
+        pageSize=10
     ).execute()
+
     files = results.get("files", [])
-    if files:
-        f = files[0]
-        print(f"Found on Drive: {f['name']} "
-              f"(modified: {f.get('modifiedTime','')})")
-        return f["id"]
-    print(f"File '{filename}' not found on Drive")
-    return None
+
+    if not files:
+        print(f"❌ File '{filename}' NOT found in Drive")
+        return None
+
+    # pick latest modified file (important if duplicates exist)
+    files = sorted(files, key=lambda x: x.get("modifiedTime", ""), reverse=True)
+    f = files[0]
+
+    print(f"✅ Found file: {f['name']} (ID: {f['id']})")
+    return f["id"]
 
 
 def download_from_drive(service):
