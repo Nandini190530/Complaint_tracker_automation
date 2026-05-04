@@ -385,6 +385,7 @@ def get_comments(video):
                         "comment_id": generate_comment_id(
                             video["video_id"], text, c["publishedAt"]
                         ),
+                            "video_id": video["video_id"],  
                         "text":        text,
                         "date":        c["publishedAt"][:10],
                         "likes":       int(c.get("likeCount", 0)),
@@ -617,6 +618,7 @@ def main():
             "Owner":           owner,
             "Owner_Email":     email,
             "Status":          "Open",
+            "Video_ID":        c.get("video_id", ""), 
             "Video_Title":     c.get("video_title", ""),
             "Video_URL":       c.get("video_url", ""),
             "Week_Added":      pd.Timestamp.now().strftime("Week %W %Y"),
@@ -639,6 +641,7 @@ def main():
     print("\n[6/7] Merging and saving Excel...")
     df_new   = pd.DataFrame(new_data)
     final_df = pd.concat([old_df, df_new], ignore_index=True)
+    final_df["YouTube_Link"] = "https://www.youtube.com/watch?v=" + final_df["Video_ID"]
 
     # Final safety dedup
     final_df["_clean"] = final_df["Complaint_Text"].apply(clean_text)
@@ -681,8 +684,22 @@ def main():
     thin     = Side(style="thin", color="DDDDDD")
     border   = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    new_start = len(old_df)  # rows before this run
+    new_start = len(old_df) 
 
+    for c_idx, col in enumerate(cols, 1):
+    val = row.get(col, "")
+
+    if col == "YouTube_Link" and val:
+        cell = ws.cell(row=row_num, column=c_idx)
+        cell.value = "Watch Video"
+        cell.hyperlink = val
+        cell.style = "Hyperlink"
+    else:
+        cell = ws.cell(row=row_num, column=c_idx, value=val)
+
+    cell.fill = fill
+    cell.border = border
+    cell.alignment = Alignment(wrap_text=True, vertical="top")
     for r_idx, row in final_df.iterrows():
         row_num   = r_idx + 2
         is_new    = r_idx >= new_start
