@@ -2,8 +2,8 @@ name: Complaint Automation
 
 on:
   schedule:
-    - cron: '30 4 * * 1'   # Every Monday 10:00 AM IST (04:30 UTC)
-  workflow_dispatch:        # Manual trigger from GitHub Actions tab
+    - cron: '30 4 * * 1'
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -11,17 +11,17 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run Python Script
+      - name: Run pipeline
         run: python main_pipeline.py
         env:
           YOUTUBE_API_KEY:    ${{ secrets.YOUTUBE_API_KEY }}
