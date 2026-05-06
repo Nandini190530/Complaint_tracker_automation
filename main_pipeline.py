@@ -1,4 +1,6 @@
-# main_pipeline.py — 50 most relevant, diverse, non-duplicate comments per run
+# main_pipeline.py
+# Extracts 10 most relevant comments — 3-4 per component
+# Focused on quality issues only, slow Gemini calls to avoid rate limit
 
 import os, io, re, json, time, random, hashlib, warnings
 import numpy as np
@@ -16,12 +18,12 @@ GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY",  "")
 LOCAL_FILE      = "FINAL_STRUCTURED_COMPLAINTS.xlsx"
 LOG_FILE        = "yt_last_run.json"
 
-# ── CAP ──────────────────────────────────────────────────────────
-MAX_COMMENTS_PER_RUN      = 50   # hard cap — never more than 50 new rows
-MAX_PER_KEYWORD_GROUP     = 20   # max 20 per group (EV/Hybrid/PBD)
-MAX_PER_PROBLEM_TYPE      = 5    # max 5 comments on same problem type
-MIN_COMMENT_WORDS         = 10   # minimum words to be considered
-MAX_COMMENT_WORDS         = 200  # maximum words — avoids essays
+# ── CAP — 10 total, balanced across 3 components ─────────────────
+MAX_TOTAL          = 10   # total comments per run
+MAX_PER_GROUP      = 4    # max per component (EV/Hybrid/PBD)
+MAX_PER_BUCKET     = 2    # max per problem type — ensures diversity
+MIN_WORDS          = 8
+MAX_WORDS          = 150
 
 # ── APIS ─────────────────────────────────────────────────────────
 youtube       = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
@@ -33,7 +35,7 @@ analyzer.lexicon.update({
     "defect":-2.5,"fault":-2.0,"malfunction":-2.5,"problem":-2.0,
     "issue":-1.8,"drain":-2.0,"stuck":-2.5,"rattle":-2.0,
     "recall":-3.0,"dangerous":-3.0,"frustrated":-2.5,
-    "terrible":-3.0,"worst":-3.0,"avoid":-2.0,
+    "terrible":-3.0,"worst":-3.0,"avoid":-2.0,"poor quality":-2.5,
     "smooth":2.0,"excellent":2.5,"amazing":2.5,"reliable":2.0,
     "recommend":2.0,"efficient":1.8,"satisfied":2.0,"best":2.5,
 })
@@ -90,64 +92,67 @@ OWNERS = {
     "Other":            ("General",        "general@maruti.com"),
 }
 
-# Problem type buckets — for diversity (max 5 per bucket)
 PROBLEM_BUCKETS = {
     "battery_drain":    ["battery drain","battery dead","battery khatam",
-                         "overnight drain","parasitic drain"],
+                         "overnight","parasitic"],
     "charging_failure": ["charge not working","not charging","charging stopped",
-                         "charging failed","charger not working"],
+                         "charging failed","charger not working","dc charging"],
     "range_issue":      ["range anxiety","range dropped","range problem",
-                         "km on full charge","range kam"],
-    "motor_failure":    ["motor failure","motor noise","electric motor",
-                         "motor problem"],
-    "hybrid_mileage":   ["hybrid mileage","mileage problem","fuel efficiency",
-                         "mileage kam","kitna deta"],
-    "hybrid_system":    ["hybrid system fault","hybrid not working",
-                         "hybrid lag","hybrid jerky","e-cvt problem"],
+                         "km on full charge","range kam","full charge"],
+    "hybrid_mileage":   ["mileage","fuel efficiency","mileage kam",
+                         "real world mileage","highway mileage"],
+    "hybrid_system":    ["hybrid system","hybrid not working","hybrid lag",
+                         "hybrid jerky","e-cvt","ecvt","hybrid fault"],
     "tailgate_sensor":  ["tailgate sensor","sensor fail","kick sensor",
-                         "foot sensor","sensor not working"],
-    "tailgate_stuck":   ["tailgate stuck","not opening","not closing",
-                         "boot stuck","dicky nahi"],
-    "tailgate_noise":   ["tailgate rattle","tailgate noise","boot rattle",
-                         "dicky rattle"],
-    "ev_software":      ["software update","software bug","ota update",
-                         "firmware","software issue"],
-    "ev_breakdown":     ["ev breakdown","breakdown","stalled","highway",
-                         "towed","band ho gaya"],
+                         "foot sensor","sensor not working","anti pinch"],
+    "tailgate_stuck":   ["not opening","not closing","boot stuck",
+                         "tailgate stuck","dicky nahi","band nahi"],
+    "tailgate_noise":   ["tailgate rattle","tailgate noise","rattle",
+                         "vibration","dicky noise"],
+    "ev_breakdown":     ["breakdown","stalled","highway","towed",
+                         "band ho gaya","stranded","broke down"],
+    "ev_software":      ["software","ota","firmware","update","bug"],
 }
 
+# India-specific searches — tightly targeted
 SEARCH_QUERIES = [
-    "Nexon EV battery problem India owner review",
-    "Nexon EV charging issue India 2024",
-    "Tata Punch EV range problem India",
-    "MG Windsor EV problem India owner",
-    "Creta EV battery drain India",
-    "Mahindra XUV400 EV problem India",
-    "BMS error Nexon EV India fix",
-    "EV battery degradation India owner complaint",
-    "Grand Vitara strong hybrid problem India",
-    "Hyryder hybrid mileage real world India",
-    "Innova Hycross hybrid fault India owner",
-    "Honda City hybrid review problem India",
-    "Invicto hybrid issue India 2024",
-    "e-CVT problem India hybrid car",
-    "power tailgate problem India SUV 2024",
-    "electric tailgate not working India car",
-    "tailgate sensor fail India owner review",
-    "electric dicky problem India car owner",
-    "power boot door malfunction India SUV",
-    "hands free tailgate issue India review",
+    # EV System — quality focused
+    "Nexon EV battery problem India owner honest review",
+    "Tata EV battery degradation India real owner experience",
+    "EV charging failure India owner complaint 2024",
+    "Nexon EV breakdown highway India owner review",
+    "Tata Punch EV real range problem India honest",
+    # Series Hybrid — quality focused
+    "Grand Vitara hybrid problem India owner honest review",
+    "Innova Hycross hybrid issue fault India owner",
+    "Toyota hybrid system problem India real review",
+    # Power Back Door — quality focused
+    "power tailgate problem India SUV owner complaint",
+    "electric tailgate sensor fail India car owner review",
+    "electric dicky malfunction India SUV honest owner",
 ]
 
-# Filter config
+# COMPLAINT WORDS — expanded to catch hybrid/tailgate language
 COMPLAINT_WORDS = [
+    # English complaints
     "problem","issue","fault","defect","not working","failed","failure",
-    "error","broken","complaint","bad","poor","worst","terrible",
+    "error","broken","complaint","bad","poor","worst","terrible","horrible",
     "stopped","not opening","not closing","drain","noise","rattle",
     "stuck","malfunction","breakdown","recall","repair","replace",
     "warning","disappointed","frustrated","pathetic","useless","avoid",
-    "nahi chal raha","band ho gaya","kharab","dikkat",
-    "nahi ho raha","nahi deta","nahi khul raha",
+    "not good","disappointing","worst decision","regret","overheating",
+    "overpriced","quality issue","quality problem","poor quality",
+    "cheap quality","bad quality","build quality",
+    # Hybrid specific
+    "jerky","lag","vibration","shudder","judder","hesitation",
+    "mileage dropped","fuel economy","less mileage","bad mileage",
+    # Tailgate specific
+    "not responding","sensor issue","not detecting","false trigger",
+    "randomly opening","randomly closing","slow","too fast",
+    # Hinglish
+    "nahi chal raha","band ho gaya","kharab","dikkat","nahi ho raha",
+    "nahi deta","nahi khul raha","problem aa raha","galat","bekar",
+    "waste","paisa barbaad","thik nahi","kaam nahi karta",
 ]
 
 INDIA_CONTEXT = [
@@ -156,21 +161,23 @@ INDIA_CONTEXT = [
     "hyryder","vitara","hycross","innova","city hybrid","creta ev",
     "mg zs","windsor ev","xuv400","rupee","lakh","kmpl",
     "service centre","service center","dealer","showroom","emi",
-    "punch ev","tigor","brezza","baleno",
+    "punch ev","tigor","brezza","grand vitara","toyota","honda city",
+    "invicto","suzuki","maruti suzuki",
 ]
 
 COMPONENT_MUST_HAVE = {
     "EV System": [
         "battery","charging","charge","range","ev","electric",
-        "bms","soc","motor","kwh","plug","charger",
+        "bms","soc","motor","kwh","plug","charger","km",
     ],
     "Series Hybrid EV": [
-        "hybrid","mileage","fuel","petrol","generator","e-cvt",
-        "self charging","strong hybrid","electric mode",
+        "hybrid","mileage","fuel","petrol","generator","e-cvt","ecvt",
+        "self charging","strong hybrid","electric mode","kmpl","km",
     ],
     "Power Back Door": [
         "tailgate","boot","dicky","door","liftgate","trunk",
-        "sensor","kick","hands free","motorized",
+        "sensor","kick","hands free","motorized","electric boot",
+        "power boot","auto close",
     ]
 }
 
@@ -212,88 +219,85 @@ def comment_matches_keyword(text):
 
 
 def get_problem_bucket(text):
-    """Identifies which problem type this comment falls into"""
     tl = text.lower()
     for bucket, signals in PROBLEM_BUCKETS.items():
         if any(s in tl for s in signals):
             return bucket
-    return "other"
+    return "general_complaint"
 
 
 def score_comment(c):
     """
-    Scores a comment for relevance quality.
-    Higher score = more useful, more specific, more likely to be a real complaint.
-    Max possible score = 100
+    Scores 0-100. Higher = more useful quality complaint.
+    Prioritises: specific model + technical detail + likes + complaint specificity
     """
-    text  = c.get("text","")
+    text  = c.get("text", "")
     likes = int(c.get("likes", 0))
     words = len(text.split())
     tl    = text.lower()
     score = 0
 
-    # Length sweet spot — 15 to 100 words is ideal for a complaint
-    if 15 <= words <= 100:
+    # Length — 15-80 words is ideal
+    if 15 <= words <= 80:
         score += 25
-    elif 10 <= words <= 150:
+    elif 8 <= words <= 120:
         score += 15
     else:
         score += 5
 
-    # Likes — real people upvoted it
-    if likes >= 10:
-        score += 20
-    elif likes >= 5:
-        score += 15
-    elif likes >= 1:
-        score += 8
+    # Likes from real owners
+    if likes >= 20:   score += 25
+    elif likes >= 10: score += 20
+    elif likes >= 5:  score += 15
+    elif likes >= 2:  score += 10
+    elif likes >= 1:  score += 5
 
-    # Contains specific model name — more professional
+    # Specific Indian model mentioned
     indian_models = [
         "nexon ev","punch ev","tigor ev","windsor ev","comet ev",
         "creta ev","xuv400","xev 9e","grand vitara","hyryder",
-        "innova hycross","city hybrid","invicto",
+        "innova hycross","city hybrid","invicto","mahindra ev",
     ]
     if any(m in tl for m in indian_models):
         score += 20
 
-    # Contains specific technical detail — higher quality
-    technical_terms = [
-        "bms","soc","kwh","kmpl","km","service centre","warranty",
-        "dealer","ota","firmware","sensor","motor","e-cvt","range",
+    # Technical quality terms
+    quality_terms = [
+        "bms","soc","kwh","kmpl","service centre","warranty","dealer",
+        "ota","firmware","sensor","motor","e-cvt","range km","build",
+        "quality","component","part","replaced","repair cost",
     ]
-    score += min(15, sum(3 for t in technical_terms if t in tl))
+    score += min(15, sum(3 for t in quality_terms if t in tl))
 
-    # Contains specific complaint signal — not vague
-    specific_complaints = [
+    # Specific quality failure words
+    quality_failures = [
         "not working","failed","breakdown","stuck","malfunction",
         "fault","defect","error","recall","replaced","repair",
+        "quality issue","poor quality","bad quality","cheap",
     ]
-    if any(sc in tl for sc in specific_complaints):
+    if any(qf in tl for qf in quality_failures):
         score += 10
 
-    # Penalty for very vague
-    vague = ["nice","love it","great car","awesome","superb","excellent"]
-    if all(v not in tl for v in vague):
-        score += 5
-    else:
-        score -= 10
-
-    # Penalty for non-India context
-    if not any(ic in tl for ic in INDIA_CONTEXT):
+    # Penalty — vague positive comments
+    vague_positive = ["love it","great car","best car","awesome","superb"]
+    if any(v in tl for v in vague_positive):
         score -= 15
+
+    # Penalty — no India context
+    if not any(ic in tl for ic in INDIA_CONTEXT):
+        score -= 20
 
     return max(0, score)
 
 
 def passes_filter(c, seen_clean, old_texts):
-    text  = c.get("text","").strip()
-    group = c.get("keyword_group","")
+    text  = c.get("text", "").strip()
+    group = c.get("keyword_group", "")
     words = text.split()
 
-    if len(words) < MIN_COMMENT_WORDS:
+    if len(words) < MIN_WORDS:
         return False, "too_short"
-    if len(words) > MAX_COMMENT_WORDS:
+    if len(words) > MAX_WORDS:
         return False, "too_long"
 
     for p in SPAM_PATTERNS:
@@ -306,12 +310,15 @@ def passes_filter(c, seen_clean, old_texts):
 
     tl = text.lower()
 
+    # Must have at least 1 complaint word
     if not any(cw in tl for cw in COMPLAINT_WORDS):
         return False, "no_complaint"
 
+    # Must have India context
     if not any(ic in tl for ic in INDIA_CONTEXT):
         return False, "no_india_context"
 
+    # Must have component word
     must = COMPONENT_MUST_HAVE.get(group, [])
     if must and not any(kw in tl for kw in must):
         return False, "no_component_word"
@@ -319,60 +326,46 @@ def passes_filter(c, seen_clean, old_texts):
     return True, "passed"
 
 
-def select_top_50(filtered_comments):
+def select_top_10(filtered):
     """
-    From all filtered comments, selects top 50 that are:
-    1. Highest relevance score
-    2. Diverse — max MAX_PER_PROBLEM_TYPE per problem bucket
-    3. Balanced — max MAX_PER_KEYWORD_GROUP per keyword group
+    Selects top 10 from filtered comments.
+    Balanced: max 4 per group, max 2 per problem bucket.
+    Sorted by relevance score — highest first.
     """
-    # Score every comment
-    for c in filtered_comments:
-        c["_score"]   = score_comment(c)
-        c["_bucket"]  = get_problem_bucket(c.get("text",""))
+    # Score all
+    for c in filtered:
+        c["_score"]  = score_comment(c)
+        c["_bucket"] = get_problem_bucket(c.get("text", ""))
 
-    # Sort by score descending
-    sorted_comments = sorted(
-        filtered_comments,
-        key=lambda x: x["_score"],
-        reverse=True
-    )
+    # Sort by score
+    sorted_c      = sorted(filtered, key=lambda x: x["_score"], reverse=True)
+    selected      = []
+    group_counts  = {}
+    bucket_counts = {}
 
-    selected        = []
-    bucket_counts   = {}
-    group_counts    = {}
-
-    for c in sorted_comments:
-        if len(selected) >= MAX_COMMENTS_PER_RUN:
+    for c in sorted_c:
+        if len(selected) >= MAX_TOTAL:
             break
+        group  = c.get("keyword_group", "Other")
+        bucket = c.get("_bucket", "general_complaint")
 
-        group  = c.get("keyword_group","Other")
-        bucket = c.get("_bucket","other")
-
-        # Check group cap
-        if group_counts.get(group, 0) >= MAX_PER_KEYWORD_GROUP:
-            continue
-
-        # Check bucket cap (diversity)
-        if bucket_counts.get(bucket, 0) >= MAX_PER_PROBLEM_TYPE:
-            continue
+        if group_counts.get(group, 0)  >= MAX_PER_GROUP:  continue
+        if bucket_counts.get(bucket,0) >= MAX_PER_BUCKET: continue
 
         selected.append(c)
-        group_counts[group]   = group_counts.get(group, 0) + 1
-        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        group_counts[group]    = group_counts.get(group, 0) + 1
+        bucket_counts[bucket]  = bucket_counts.get(bucket, 0) + 1
 
-    print(f"\nTop {len(selected)} selected from {len(filtered_comments)} filtered:")
-    print(f"  By group:")
-    for g, cnt in sorted(group_counts.items()):
-        print(f"    {g:<22}: {cnt}")
-    print(f"  By problem type:")
-    for b, cnt in sorted(bucket_counts.items(), key=lambda x: -x[1]):
-        if cnt > 0:
-            print(f"    {b:<22}: {cnt}")
-    print(f"  Score range: "
-          f"{selected[-1]['_score'] if selected else 0}"
-          f" to {selected[0]['_score'] if selected else 0}")
-
+    print(f"\nSelected {len(selected)} from {len(filtered)} filtered:")
+    print("  By component:")
+    for g, n in sorted(group_counts.items()):
+        print(f"    {g:<25}: {n}")
+    print("  By problem type:")
+    for b, n in sorted(bucket_counts.items(), key=lambda x: -x[1]):
+        print(f"    {b:<25}: {n}")
+    if selected:
+        print(f"  Score range: "
+              f"{selected[-1]['_score']} to {selected[0]['_score']}")
     return selected
 
 
@@ -380,10 +373,10 @@ def get_sentiment(text):
     if not text or len(str(text).strip()) < 5:
         return "Neutral", 0.0
     sentences = [s.strip() for s in
-                 str(text).replace('\n','. ').split('.')
+                 str(text).replace('\n', '. ').split('.')
                  if len(s.strip()) > 10]
     if len(sentences) > 1:
-        scores   = [analyzer.polarity_scores(s) for s in sentences[:15]]
+        scores   = [analyzer.polarity_scores(s) for s in sentences[:10]]
         compound = float(np.mean([s['compound'] for s in scores]))
     else:
         compound = analyzer.polarity_scores(text)['compound']
@@ -448,9 +441,6 @@ def get_comments(video):
                 matched, group = comment_matches_keyword(text)
                 if matched:
                     comments.append({
-                        "comment_id": hashlib.md5(
-                            f"{video['video_id']}_{text[:50]}".encode()
-                        ).hexdigest(),
                         "video_id":      video["video_id"],
                         "text":          text,
                         "date":          c["publishedAt"][:10],
@@ -468,74 +458,92 @@ def get_comments(video):
 
 
 # ════════════════════════════════════════════════════════════════
-# GEMINI
+# GEMINI — with rate limit handling
 # ════════════════════════════════════════════════════════════════
 
 GEMINI_PROMPT = '''
 You are an automotive quality analyst at Maruti Suzuki India.
-Read this YouTube comment from an Indian car owner.
-Extract structured complaint data. This must be a REAL complaint from a REAL owner.
-Write "Not specified" for fields you cannot determine.
-Reply ONLY with valid JSON — no markdown, no backticks.
+Analyse this YouTube comment. Extract quality defect information only.
+Focus on: what went wrong, why it went wrong, what the impact was.
+Write "Not specified" for unknown fields.
+Reply ONLY with valid JSON — absolutely no markdown or backticks.
 
 Comment: "{comment}"
 Video: "{title}"
-Feature Category: "{group}"
+Feature: "{group}"
 
 {{
-  "is_useful": true or false — false if not a genuine owner complaint,
-  "system_technology": "Specific subcategory e.g. EV System (Battery Drain) or EV System (Charging Failure) or Series Hybrid EV (Mileage Drop) or Power Back Door (Sensor Failure)",
-  "fn_type": "FN1 if something is broken or malfunctioning. FN2 if owner feedback or feature suggestion.",
+  "is_useful": true if this is a genuine quality complaint from a real owner. false if opinion/general query/spam.,
+  "system_technology": "Specific e.g. EV System (Battery Drain) or EV System (Charging Failure) or Series Hybrid EV (Mileage Drop) or Series Hybrid EV (System Fault) or Power Back Door (Sensor Failure) or Power Back Door (Motor Failure)",
+  "fn_type": "FN1 if component is broken or malfunctioning. FN2 if owner feedback or feature opinion.",
   "month": "Month if mentioned e.g. March. Not specified if not mentioned.",
   "year": "Year if mentioned e.g. 2024. Not specified if not mentioned.",
-  "model": "Full car model e.g. Tata Nexon EV or Maruti Grand Vitara Hybrid. Not specified if unclear.",
-  "defect_summary": "One professional sentence describing exactly what the owner experienced.",
-  "cause": "Root cause if mentioned e.g. BMS software bug, faulty sensor, water ingress. Not specified if unknown.",
-  "action": "What was done e.g. visited service centre, software update resolved it. Not specified if not mentioned.",
+  "model": "Exact car model e.g. Tata Nexon EV 2023 or Maruti Grand Vitara Strong Hybrid. Not specified if not mentioned.",
+  "defect_summary": "Professional one sentence: what quality issue did the owner face?",
+  "cause": "Root cause if mentioned: BMS failure, sensor malfunction, software bug, design flaw, manufacturing defect. Not specified if unknown.",
+  "action": "Resolution if mentioned: service centre visit, software update, part replacement, no fix found. Not specified if not mentioned.",
   "sentiment": "Negative, Positive, or Neutral"
 }}
 '''
 
 
-def run_gemini(c):
+def call_gemini_safe(c):
+    """
+    Calls Gemini with proper rate limit handling.
+    Free tier = 15 requests/minute = 4 second gap minimum.
+    We use 5 second gap to be safe.
+    """
     prompt = GEMINI_PROMPT.format(
-        comment=c.get("text","")[:600],
-        title=c.get("video_title","")[:100],
-        group=c.get("keyword_group","")
+        comment=c.get("text", "")[:500],
+        title=c.get("video_title", "")[:80],
+        group=c.get("keyword_group", "")
     )
+
     for attempt in range(3):
         try:
+            # Wait before each call to respect rate limit
+            time.sleep(5)
+
             resp = gemini_client.models.generate_content(
-                model="gemini-2.0-flash", contents=prompt
+                model="gemini-2.0-flash",
+                contents=prompt
             )
             raw = resp.text.strip()
-            raw = raw.replace("```json","").replace("```","").strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
             s   = raw.find("{")
             e   = raw.rfind("}") + 1
             if s != -1 and e > s:
                 raw = raw[s:e]
             return json.loads(raw)
-        except json.JSONDecodeError:
-            time.sleep(2)
+
+        except json.JSONDecodeError as je:
+            print(f"  JSON parse error: {str(je)[:40]}")
+            time.sleep(3)
+
         except Exception as ex:
             err = str(ex)
-            if "429" in err or "quota" in err.lower():
-                print("  Rate limit — waiting 30s")
-                time.sleep(30)
+            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                print(f"  Rate limit → waiting 60s (attempt {attempt+1})")
+                time.sleep(60)  # full minute for rate limit
+            elif "500" in err or "503" in err:
+                print(f"  Server error → waiting 15s")
+                time.sleep(15)
             else:
-                time.sleep(3)
-    return None
+                print(f"  Gemini error: {err[:60]}")
+                time.sleep(5)
+
+    return None  # all 3 attempts failed
 
 
 def fallback(c):
     return {
         "is_useful":        True,
-        "system_technology": c.get("keyword_group","Not specified"),
+        "system_technology": c.get("keyword_group", "Not specified"),
         "fn_type":          "Not specified",
         "month":            "Not specified",
         "year":             "Not specified",
         "model":            "Not specified",
-        "defect_summary":   c.get("text","")[:200],
+        "defect_summary":   c.get("text", "")[:200],
         "cause":            "Not specified",
         "action":           "Not specified",
         "sentiment":        "Neutral",
@@ -543,7 +551,7 @@ def fallback(c):
 
 
 # ════════════════════════════════════════════════════════════════
-# EXCEL — your exact column format
+# EXCEL
 # ════════════════════════════════════════════════════════════════
 
 EXCEL_COLUMNS = [
@@ -567,7 +575,7 @@ EXCEL_COLUMNS = [
     "Original Comment",
 ]
 
-COL_WIDTHS = [6,28,10,12,8,28,55,40,35,12,12,18,30,10,10,45,12,60]
+COL_WIDTHS = [6, 28, 10, 12, 8, 28, 55, 40, 35, 12, 12, 18, 30, 10, 10, 45, 12, 60]
 
 
 def save_excel(final_df, new_start):
@@ -582,7 +590,7 @@ def save_excel(final_df, new_start):
     hfill = PatternFill("solid", fgColor="1F3864")
     hfont = Font(color="FFFFFF", bold=True, size=11)
     for ci, col in enumerate(EXCEL_COLUMNS, 1):
-        cell = ws.cell(row=1, column=ci, value=col)
+        cell           = ws.cell(row=1, column=ci, value=col)
         cell.fill      = hfill
         cell.font      = hfont
         cell.alignment = Alignment(
@@ -605,35 +613,35 @@ def save_excel(final_df, new_start):
     for ri, row in final_df.iterrows():
         rn        = ri + 2
         is_new    = ri >= new_start
-        sentiment = str(row.get("Sentiment","")).lower()
+        sentiment = str(row.get("Sentiment", "")).lower()
         fill      = (new_fill if is_new else
                      neg_fill if sentiment == "negative" else
                      pos_fill if sentiment == "positive" else
                      neu_fill)
 
         values = [
-            row.get("S.No",""),
-            row.get("System / Technology",""),
-            row.get("FN1 / FN2",""),
-            row.get("Month",""),
-            row.get("Year",""),
-            row.get("Model",""),
-            row.get("Defect / Feedback Summary",""),
-            row.get("Cause",""),
-            row.get("Action",""),
-            row.get("Sentiment",""),
-            row.get("VADER Score",""),
-            row.get("Owner Name",""),
-            row.get("Owner Email",""),
-            row.get("Status","Open"),
-            row.get("Source","YouTube"),
-            row.get("Video URL",""),
-            row.get("Date",""),
-            row.get("Original Comment",""),
+            row.get("S.No", ""),
+            row.get("System / Technology", ""),
+            row.get("FN1 / FN2", ""),
+            row.get("Month", ""),
+            row.get("Year", ""),
+            row.get("Model", ""),
+            row.get("Defect / Feedback Summary", ""),
+            row.get("Cause", ""),
+            row.get("Action", ""),
+            row.get("Sentiment", ""),
+            row.get("VADER Score", ""),
+            row.get("Owner Name", ""),
+            row.get("Owner Email", ""),
+            row.get("Status", "Open"),
+            row.get("Source", "YouTube"),
+            row.get("Video URL", ""),
+            row.get("Date", ""),
+            row.get("Original Comment", ""),
         ]
 
         for ci, val in enumerate(values, 1):
-            cell = ws.cell(row=rn, column=ci, value=val)
+            cell           = ws.cell(row=rn, column=ci, value=val)
             cell.fill      = fill
             cell.border    = border
             cell.alignment = Alignment(wrap_text=True, vertical="top")
@@ -648,7 +656,8 @@ def save_excel(final_df, new_start):
 def main():
     print("=" * 60)
     print("PIPELINE STARTED")
-    print(f"Cap: {MAX_COMMENTS_PER_RUN} most relevant comments per run")
+    print(f"Target: {MAX_TOTAL} best quality complaints "
+          f"({MAX_PER_GROUP} max per component)")
     print("=" * 60)
 
     # 1 — Download
@@ -658,7 +667,7 @@ def main():
     if file_exists:
         try:
             old_df = pd.read_excel(LOCAL_FILE)
-            for col_check in ["Original Comment","Complaint_Text","text"]:
+            for col_check in ["Original Comment", "Complaint_Text", "text"]:
                 if col_check in old_df.columns:
                     old_texts = set(
                         old_df[col_check].dropna().apply(clean_text)
@@ -666,8 +675,8 @@ def main():
                     break
             else:
                 old_texts = set()
-            print(f"Existing rows: {len(old_df)}")
-            print(f"Existing comment fingerprints: {len(old_texts)}")
+            print(f"Existing rows     : {len(old_df)}")
+            print(f"Existing comments : {len(old_texts)} fingerprints loaded")
         except Exception as e:
             print(f"Could not read file ({e}) — starting fresh")
             old_df    = pd.DataFrame()
@@ -680,7 +689,8 @@ def main():
     next_sno = get_next_sno(old_df)
 
     # 2 — Scrape
-    print("\n[2/7] Scraping YouTube...")
+    print(f"\n[2/7] Scraping YouTube "
+          f"({len(SEARCH_QUERIES)} targeted queries)...")
     all_comments = []
     seen_videos  = set()
 
@@ -694,11 +704,11 @@ def main():
             comments = get_comments(video)
             if comments:
                 all_comments.extend(comments)
-                print(f"    → {video['title'][:40]} "
-                      f"| {len(comments)} keyword-matched")
+                print(f"    → {video['title'][:42]} "
+                      f"| {len(comments)} matched")
         time.sleep(random.uniform(0.5, 1.0))
 
-    print(f"\nTotal keyword-matched: {len(all_comments)} "
+    print(f"\nKeyword-matched: {len(all_comments)} "
           f"from {len(seen_videos)} videos")
 
     if not all_comments:
@@ -707,7 +717,7 @@ def main():
         return
 
     # 3 — Filter
-    print("\n[3/7] Relevance filtering...")
+    print("\n[3/7] Filtering for quality complaints...")
     filtered   = []
     seen_clean = set()
     rejected   = {}
@@ -715,78 +725,94 @@ def main():
     for c in all_comments:
         passed, reason = passes_filter(c, seen_clean, old_texts)
         if passed:
-            seen_clean.add(clean_text(c.get("text","")))
+            seen_clean.add(clean_text(c.get("text", "")))
             filtered.append(c)
         else:
             rejected[reason] = rejected.get(reason, 0) + 1
 
-    print(f"Before filter: {len(all_comments)}")
-    print(f"After filter : {len(filtered)} relevant")
+    print(f"Before : {len(all_comments)}")
+    print(f"After  : {len(filtered)} quality complaints")
     for reason, count in sorted(rejected.items(), key=lambda x: -x[1]):
-        print(f"  {reason:<22}: {count} rejected")
+        print(f"  {reason:<25}: {count} rejected")
 
     if not filtered:
-        print("Nothing passed filter.")
+        print("Nothing passed filter. Exiting.")
         save_last_run()
         return
 
-    # 4 — Select top 50 most relevant + diverse
-    print(f"\n[4/7] Selecting top {MAX_COMMENTS_PER_RUN} most relevant...")
-    top_comments = select_top_50(filtered)
+    # 4 — Select top 10
+    print(f"\n[4/7] Selecting top {MAX_TOTAL} most relevant...")
+    top_comments = select_top_10(filtered)
 
-    # 5 — Gemini + VADER
-    print(f"\n[5/7] Gemini + VADER ({len(top_comments)} comments)...")
+    if not top_comments:
+        print("No comments selected.")
+        save_last_run()
+        return
+
+    # 5 — Gemini + VADER (5s gap between calls)
+    total_gemini_time = len(top_comments) * 6
+    print(f"\n[5/7] Gemini analysis ({len(top_comments)} comments)...")
+    print(f"  Estimated time: ~{total_gemini_time}s "
+          f"(5s gap per call to avoid rate limit)")
+
     new_rows = []
 
     for i, c in enumerate(top_comments):
-        print(f"  [{i+1}/{len(top_comments)}] "
-              f"[score={c.get('_score',0)}] ", end="", flush=True)
+        print(f"\n  [{i+1}/{len(top_comments)}] "
+              f"score={c.get('_score', 0)} | "
+              f"{c.get('keyword_group','')} | "
+              f"{c.get('text','')[:60]}...")
 
-        analysis = run_gemini(c)
+        analysis = call_gemini_safe(c)
+
         if analysis is None:
-            print("Gemini failed → fallback")
+            print("  → Gemini failed 3 times, using raw comment as fallback")
             analysis = fallback(c)
-
-        if not analysis.get("is_useful", True):
-            print("Gemini: not useful → skipped")
+        elif not analysis.get("is_useful", True):
+            print("  → Gemini: not a quality complaint → skipped")
             continue
 
         sentiment_label, vader_score = get_sentiment(c["text"])
-        group        = c.get("keyword_group","Other")
+        group        = c.get("keyword_group", "Other")
         owner, email = OWNERS.get(group, OWNERS["Other"])
 
         new_rows.append({
             "S.No":                      next_sno,
-            "System / Technology":       analysis.get("system_technology", group),
-            "FN1 / FN2":                 analysis.get("fn_type","Not specified"),
-            "Month":                     analysis.get("month","Not specified"),
-            "Year":                      analysis.get("year","Not specified"),
-            "Model":                     analysis.get("model","Not specified"),
-            "Defect / Feedback Summary": analysis.get("defect_summary",
-                                                      c["text"][:150]),
-            "Cause":                     analysis.get("cause","Not specified"),
-            "Action":                    analysis.get("action","Not specified"),
+            "System / Technology":       analysis.get(
+                                             "system_technology", group),
+            "FN1 / FN2":                 analysis.get(
+                                             "fn_type", "Not specified"),
+            "Month":                     analysis.get(
+                                             "month", "Not specified"),
+            "Year":                      analysis.get(
+                                             "year", "Not specified"),
+            "Model":                     analysis.get(
+                                             "model", "Not specified"),
+            "Defect / Feedback Summary": analysis.get(
+                                             "defect_summary",
+                                             c["text"][:150]),
+            "Cause":                     analysis.get(
+                                             "cause", "Not specified"),
+            "Action":                    analysis.get(
+                                             "action", "Not specified"),
             "Sentiment":                 sentiment_label,
             "VADER Score":               vader_score,
             "Owner Name":                owner,
             "Owner Email":               email,
             "Status":                    "Open",
             "Source":                    "YouTube",
-            "Video URL":                 c.get("video_url",""),
-            "Date":                      c.get("date",""),
-            "Original Comment":          c.get("text",""),
+            "Video URL":                 c.get("video_url", ""),
+            "Date":                      c.get("date", ""),
+            "Original Comment":          c.get("text", ""),
         })
 
         next_sno += 1
-        print(f"{sentiment_label} | "
+        print(f"  → {sentiment_label} | "
               f"{analysis.get('fn_type','?')} | "
-              f"{analysis.get('model','?')[:18]} | "
-              f"{analysis.get('defect_summary','?')[:35]}")
+              f"{analysis.get('model','?')[:20]} | "
+              f"{analysis.get('defect_summary','?')[:45]}")
 
-        time.sleep(random.uniform(1.2, 2.0))
-
-    print(f"\nNew rows created: {len(new_rows)} "
-          f"(max was {MAX_COMMENTS_PER_RUN})")
+    print(f"\nNew rows created: {len(new_rows)}/{MAX_TOTAL}")
 
     if not new_rows:
         print("No new rows.")
@@ -794,7 +820,7 @@ def main():
         return
 
     # 6 — Merge
-    print("\n[6/7] Merging...")
+    print("\n[6/7] Merging with existing data...")
     df_new    = pd.DataFrame(new_rows)
     new_start = len(old_df)
 
@@ -809,32 +835,29 @@ def main():
     else:
         final_df = df_new[EXCEL_COLUMNS].copy()
 
-    # Final dedup
+    # Safety dedup
     final_df["_d"] = final_df["Original Comment"].apply(clean_text)
     before         = len(final_df)
     final_df.drop_duplicates(subset=["_d"], inplace=True)
     final_df.drop(columns=["_d"], inplace=True)
     final_df.reset_index(drop=True, inplace=True)
     if before > len(final_df):
-        print(f"Safety dedup: removed {before - len(final_df)} rows")
+        print(f"Safety dedup removed {before - len(final_df)} rows")
 
-    # Recalculate S.No sequentially
     final_df["S.No"] = range(1, len(final_df) + 1)
-
     print(f"Total: {len(final_df)} rows "
-          f"(existing: {new_start} + new: {len(new_rows)})")
+          f"({new_start} existing + {len(new_rows)} new)")
 
     # 7 — Save + Upload
-    print("\n[7/7] Saving Excel and uploading...")
+    print("\n[7/7] Saving and uploading to Google Drive...")
     save_excel(final_df, new_start)
     upload_to_onedrive()
     save_last_run()
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")
-    print(f"Total rows in Excel  : {len(final_df)}")
-    print(f"New rows this run    : {len(new_rows)}")
-    print(f"Cap used             : {len(new_rows)}/{MAX_COMMENTS_PER_RUN}")
+    print(f"Total rows in Excel : {len(final_df)}")
+    print(f"New rows this run   : {len(new_rows)}")
     print("=" * 60)
 
 
