@@ -659,34 +659,36 @@ def main():
     print(f"Target: {MAX_TOTAL} best quality complaints "
           f"({MAX_PER_GROUP} max per component)")
     print("=" * 60)
+    
+# 1 — Download
+print("\n[1/7] Downloading from Google Drive...")
+file_exists = download_from_onedrive()
 
-    # 1 — Download
-    print("\n[1/7] Downloading from Google Drive...")
-    file_exists = download_from_onedrive()
+# ✅ STOP if file not downloaded
+if not file_exists:
+    raise Exception("STOP: Excel file not downloaded. Preventing overwrite.")
 
-    if file_exists:
-        try:
-            old_df = pd.read_excel(LOCAL_FILE)
-            for col_check in ["Original Comment", "Complaint_Text", "text"]:
-                if col_check in old_df.columns:
-                    old_texts = set(
-                        old_df[col_check].dropna().apply(clean_text)
-                    )
-                    break
-            else:
-                old_texts = set()
-            print(f"Existing rows     : {len(old_df)}")
-            print(f"Existing comments : {len(old_texts)} fingerprints loaded")
-        except Exception as e:
-            print(f"Could not read file ({e}) — starting fresh")
-            old_df    = pd.DataFrame()
-            old_texts = set()
+# ✅ Only success path continues
+try:
+    old_df = pd.read_excel(LOCAL_FILE)
+    print(f"Existing rows     : {len(old_df)}")
+
+    for col_check in ["Original Comment", "Complaint_Text", "text"]:
+        if col_check in old_df.columns:
+            old_texts = set(
+                old_df[col_check].dropna().apply(clean_text)
+            )
+            break
     else:
-        old_df    = pd.DataFrame()
         old_texts = set()
-        print("No existing file — starting fresh")
 
-    next_sno = get_next_sno(old_df)
+    print(f"Existing comments : {len(old_texts)} fingerprints loaded")
+
+except Exception as e:
+    print(f"ERROR reading Excel: {e}")
+    raise Exception("STOP: Failed to read existing Excel file")
+
+next_sno = get_next_sno(old_df)
 
     # 2 — Scrape
     print(f"\n[2/7] Scraping YouTube "
@@ -702,19 +704,33 @@ def main():
         for video in new_vids:
             seen_videos.add(video["video_id"])
             comments = get_comments(video)
-            if comments:
-                all_comments.extend(comments)
-                print(f"    → {video['title'][:42]} "
-                      f"| {len(comments)} matched")
-        time.sleep(random.uniform(0.5, 1.0))
 
-    print(f"\nKeyword-matched: {len(all_comments)} "
-          f"from {len(seen_videos)} videos")
+            filtered_comments = []
+    for c in comments:
+        clean = clean_text(c.get("text", ""))
 
-    if not all_comments:
-        print("No comments found.")
-        save_last_run()
-        return
+        if clean in old_texts or clean in seen_clean:
+            continue
+
+        seen_clean.add(clean)
+        filtered_comments.append(c)
+
+    comments = filtered_comments
+
+
+          if comments:
+    all_comments.extend(comments)
+    print(f"    → {video['title'][:42]} | {len(comments)} matched")
+
+time.sleep(random.uniform(0.5, 1.0))
+
+print(f"\nKeyword-matched: {len(all_comments)} "
+      f"from {len(seen_videos)} videos")
+
+if not all_comments:
+    print("No comments found.")
+    save_last_run()
+    return
 
     # 3 — Filter
     print("\n[3/7] Filtering for quality complaints...")
@@ -824,7 +840,7 @@ def main():
     df_new    = pd.DataFrame(new_rows)
     new_start = len(old_df)
 
-    if not old_df.empty:
+    if old_df is not None and not old_df.empty:
         for col in EXCEL_COLUMNS:
             if col not in old_df.columns:
                 old_df[col] = ""
