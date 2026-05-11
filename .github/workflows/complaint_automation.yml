@@ -2,8 +2,11 @@ name: Complaint Automation
 
 on:
   schedule:
-    - cron: '30 4 * * 1'
+    - cron: '30 10 * * 1'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   run-script:
@@ -24,15 +27,14 @@ jobs:
       - name: Run pipeline
         run: python main_pipeline.py
         env:
-          YOUTUBE_API_KEY:    ${{ secrets.YOUTUBE_API_KEY }}
-          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
 
       - name: Save run log
         run: |
-          git config user.name  "Pipeline Bot"
+          git config user.name "Pipeline Bot"
           git config user.email "bot@pipeline.com"
           git add yt_last_run.json || true
-          git diff --staged --quiet || \
-            git commit -m "Weekly run $(date +'%Y-%m-%d')"
+          git diff --staged --quiet || git commit -m "Weekly run $(date +'%Y-%m-%d')"
           git push || true
