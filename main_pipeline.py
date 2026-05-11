@@ -690,20 +690,26 @@ except Exception as e:
 
 next_sno = get_next_sno(old_df)
 
-    # 2 — Scrape
-    print(f"\n[2/7] Scraping YouTube "
-          f"({len(SEARCH_QUERIES)} targeted queries)...")
-    all_comments = []
-    seen_videos  = set()
+# 2 — Scrape
+print(f"\n[2/7] Scraping YouTube "
+      f"({len(SEARCH_QUERIES)} targeted queries)...")
 
-    for i, query in enumerate(SEARCH_QUERIES):
-        print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {query}")
-        videos   = search_videos(query, max_results=5)
-        new_vids = [v for v in videos
-                    if v["video_id"] not in seen_videos]
-        for video in new_vids:
-            seen_videos.add(video["video_id"])
-            comments = get_comments(video)
+all_comments = []
+seen_videos = set()
+
+for i, query in enumerate(SEARCH_QUERIES):
+    print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {query}")
+
+    videos = search_videos(query, max_results=5)
+
+    new_vids = [
+        v for v in videos
+        if v["video_id"] not in seen_videos
+    ]
+
+    for video in new_vids:
+        seen_videos.add(video["video_id"])
+        comments = get_comments(video)
 
             filtered_comments = []
     for c in comments:
