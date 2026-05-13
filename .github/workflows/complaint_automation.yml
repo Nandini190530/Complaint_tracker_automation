@@ -2,7 +2,7 @@ name: Complaint Automation
 
 on:
   schedule:
-     - cron: '30 6 * * 1'
+     - cron: '30 7 * * *'
   workflow_dispatch:
 
 permissions:
