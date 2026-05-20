@@ -659,111 +659,174 @@ def main():
     print(f"Target: {MAX_TOTAL} best quality complaints "
           f"({MAX_PER_GROUP} max per component)")
     print("=" * 60)
-    
-# 1 — Download
-print("\n[1/7] Downloading from Google Drive...")
-file_exists = download_from_onedrive()
 
-# ✅ STOP if file not downloaded
-if not file_exists:
-    raise Exception("STOP: Excel file not downloaded. Preventing overwrite.")
+    # 1 — Download
+    print("\n[1/7] Downloading from Google Drive...")
+    file_exists = download_from_onedrive()
 
-# ✅ Only success path continues
-try:
-    old_df = pd.read_excel(LOCAL_FILE)
-    print(f"Existing rows     : {len(old_df)}")
+    # STOP if file not downloaded
+    if not file_exists:
+        raise Exception(
+            "STOP: Excel file not downloaded. Preventing overwrite."
+        )
 
-    for col_check in ["Original Comment", "Complaint_Text", "text"]:
-        if col_check in old_df.columns:
-            old_texts = set(
-                old_df[col_check].dropna().apply(clean_text)
-            )
-            break
-    else:
-        old_texts = set()
+    # Read existing Excel
+    try:
+        old_df = pd.read_excel(LOCAL_FILE)
 
-    print(f"Existing comments : {len(old_texts)} fingerprints loaded")
+        print(f"Existing rows     : {len(old_df)}")
 
-except Exception as e:
-    print(f"ERROR reading Excel: {e}")
-    raise Exception("STOP: Failed to read existing Excel file")
+        for col_check in [
+            "Original Comment",
+            "Complaint_Text",
+            "text"
+        ]:
+            if col_check in old_df.columns:
+                old_texts = set(
+                    old_df[col_check]
+                    .dropna()
+                    .apply(clean_text)
+                )
+                break
+        else:
+            old_texts = set()
 
-next_sno = get_next_sno(old_df)
+        print(
+            f"Existing comments : "
+            f"{len(old_texts)} fingerprints loaded"
+        )
 
-# 2 — Scrape
-print(f"\n[2/7] Scraping YouTube "
-      f"({len(SEARCH_QUERIES)} targeted queries)...")
+    except Exception as e:
+        print(f"ERROR reading Excel: {e}")
+        raise Exception(
+            "STOP: Failed to read existing Excel file"
+        )
 
-all_comments = []
-seen_videos = set()
+    next_sno = get_next_sno(old_df)
 
-for i, query in enumerate(SEARCH_QUERIES):
-    print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {query}")
+    # 2 — Scrape
+    print(f"\n[2/7] Scraping YouTube "
+          f"({len(SEARCH_QUERIES)} targeted queries)...")
 
-    videos = search_videos(query, max_results=5)
+    all_comments = []
+    seen_videos = set()
+    seen_clean = set()
 
-    new_vids = [
-        v for v in videos
-        if v["video_id"] not in seen_videos
-    ]
+    for i, query in enumerate(SEARCH_QUERIES):
 
-    for video in new_vids:
-        seen_videos.add(video["video_id"])
-        comments = get_comments(video)
+        print(f"  [{i+1}/{len(SEARCH_QUERIES)}] {query}")
+
+        videos = search_videos(
+            query,
+            max_results=5
+        )
+
+        new_vids = [
+            v for v in videos
+            if v["video_id"] not in seen_videos
+        ]
+
+        for video in new_vids:
+
+            seen_videos.add(video["video_id"])
+
+            comments = get_comments(video)
 
             filtered_comments = []
-    for c in comments:
-        clean = clean_text(c.get("text", ""))
 
-        if clean in old_texts or clean in seen_clean:
-            continue
+            for c in comments:
 
-        seen_clean.add(clean)
-        filtered_comments.append(c)
+                clean = clean_text(
+                    c.get("text", "")
+                )
 
-    comments = filtered_comments
+                if clean in old_texts:
+                    continue
 
+                if clean in seen_clean:
+                    continue
 
-          if comments:
-    all_comments.extend(comments)
-    print(f"    → {video['title'][:42]} | {len(comments)} matched")
+                seen_clean.add(clean)
 
-time.sleep(random.uniform(0.5, 1.0))
+                filtered_comments.append(c)
 
-print(f"\nKeyword-matched: {len(all_comments)} "
-      f"from {len(seen_videos)} videos")
+            comments = filtered_comments
 
-if not all_comments:
-    print("No comments found.")
-    save_last_run()
-    return
+            if comments:
+
+                all_comments.extend(comments)
+
+                print(
+                    f"    → {video['title'][:42]} | "
+                    f"{len(comments)} matched"
+                )
+
+            time.sleep(
+                random.uniform(0.5, 1.0)
+            )
+
+    print(
+        f"\nKeyword-matched: {len(all_comments)} "
+        f"from {len(seen_videos)} videos"
+    )
+
+    if not all_comments:
+        print("No comments found.")
+        save_last_run()
+        return
 
     # 3 — Filter
     print("\n[3/7] Filtering for quality complaints...")
-    filtered   = []
-    seen_clean = set()
-    rejected   = {}
+
+    filtered = []
+    rejected = {}
+
+    seen_clean_filter = set()
 
     for c in all_comments:
-        passed, reason = passes_filter(c, seen_clean, old_texts)
+
+        passed, reason = passes_filter(
+            c,
+            seen_clean_filter,
+            old_texts
+        )
+
         if passed:
-            seen_clean.add(clean_text(c.get("text", "")))
+
+            seen_clean_filter.add(
+                clean_text(c.get("text", ""))
+            )
+
             filtered.append(c)
+
         else:
-            rejected[reason] = rejected.get(reason, 0) + 1
+
+            rejected[reason] = (
+                rejected.get(reason, 0) + 1
+            )
 
     print(f"Before : {len(all_comments)}")
     print(f"After  : {len(filtered)} quality complaints")
-    for reason, count in sorted(rejected.items(), key=lambda x: -x[1]):
-        print(f"  {reason:<25}: {count} rejected")
+
+    for reason, count in sorted(
+        rejected.items(),
+        key=lambda x: -x[1]
+    ):
+        print(
+            f"  {reason:<25}: {count} rejected"
+        )
 
     if not filtered:
         print("Nothing passed filter. Exiting.")
         save_last_run()
         return
 
-    # 4 — Select top 10
-    print(f"\n[4/7] Selecting top {MAX_TOTAL} most relevant...")
+    # 4 — Select top complaints
+    print(
+        f"\n[4/7] Selecting top {MAX_TOTAL} "
+        f"most relevant..."
+    )
+
     top_comments = select_top_10(filtered)
 
     if not top_comments:
@@ -771,70 +834,158 @@ if not all_comments:
         save_last_run()
         return
 
-    # 5 — Gemini + VADER (5s gap between calls)
+    # 5 — Gemini + VADER
     total_gemini_time = len(top_comments) * 6
-    print(f"\n[5/7] Gemini analysis ({len(top_comments)} comments)...")
-    print(f"  Estimated time: ~{total_gemini_time}s "
-          f"(5s gap per call to avoid rate limit)")
+
+    print(
+        f"\n[5/7] Gemini analysis "
+        f"({len(top_comments)} comments)..."
+    )
+
+    print(
+        f"  Estimated time: "
+        f"~{total_gemini_time}s "
+        f"(5s gap per call to avoid rate limit)"
+    )
 
     new_rows = []
 
     for i, c in enumerate(top_comments):
-        print(f"\n  [{i+1}/{len(top_comments)}] "
-              f"score={c.get('_score', 0)} | "
-              f"{c.get('keyword_group','')} | "
-              f"{c.get('text','')[:60]}...")
+
+        print(
+            f"\n  [{i+1}/{len(top_comments)}] "
+            f"score={c.get('_score', 0)} | "
+            f"{c.get('keyword_group', '')} | "
+            f"{c.get('text', '')[:60]}..."
+        )
 
         analysis = call_gemini_safe(c)
 
         if analysis is None:
-            print("  → Gemini failed 3 times, using raw comment as fallback")
+
+            print(
+                "  → Gemini failed 3 times, "
+                "using raw comment as fallback"
+            )
+
             analysis = fallback(c)
+
         elif not analysis.get("is_useful", True):
-            print("  → Gemini: not a quality complaint → skipped")
+
+            print(
+                "  → Gemini: not a quality "
+                "complaint → skipped"
+            )
+
             continue
 
-        sentiment_label, vader_score = get_sentiment(c["text"])
-        group        = c.get("keyword_group", "Other")
-        owner, email = OWNERS.get(group, OWNERS["Other"])
+        sentiment_label, vader_score = get_sentiment(
+            c["text"]
+        )
+
+        group = c.get(
+            "keyword_group",
+            "Other"
+        )
+
+        owner, email = OWNERS.get(
+            group,
+            OWNERS["Other"]
+        )
 
         new_rows.append({
-            "S.No":                      next_sno,
-            "System / Technology":       analysis.get(
-                                             "system_technology", group),
-            "FN1 / FN2":                 analysis.get(
-                                             "fn_type", "Not specified"),
-            "Month":                     analysis.get(
-                                             "month", "Not specified"),
-            "Year":                      analysis.get(
-                                             "year", "Not specified"),
-            "Model":                     analysis.get(
-                                             "model", "Not specified"),
-            "Defect / Feedback Summary": analysis.get(
-                                             "defect_summary",
-                                             c["text"][:150]),
-            "Cause":                     analysis.get(
-                                             "cause", "Not specified"),
-            "Action":                    analysis.get(
-                                             "action", "Not specified"),
-            "Sentiment":                 sentiment_label,
-            "VADER Score":               vader_score,
-            "Owner Name":                owner,
-            "Owner Email":               email,
-            "Status":                    "Open",
-            "Source":                    "YouTube",
-            "Video URL":                 c.get("video_url", ""),
-            "Date":                      c.get("date", ""),
-            "Original Comment":          c.get("text", ""),
+
+            "S.No": next_sno,
+
+            "System / Technology":
+                analysis.get(
+                    "system_technology",
+                    group
+                ),
+
+            "FN1 / FN2":
+                analysis.get(
+                    "fn_type",
+                    "Not specified"
+                ),
+
+            "Month":
+                analysis.get(
+                    "month",
+                    "Not specified"
+                ),
+
+            "Year":
+                analysis.get(
+                    "year",
+                    "Not specified"
+                ),
+
+            "Model":
+                analysis.get(
+                    "model",
+                    "Not specified"
+                ),
+
+            "Defect / Feedback Summary":
+                analysis.get(
+                    "defect_summary",
+                    c["text"][:150]
+                ),
+
+            "Cause":
+                analysis.get(
+                    "cause",
+                    "Not specified"
+                ),
+
+            "Action":
+                analysis.get(
+                    "action",
+                    "Not specified"
+                ),
+
+            "Sentiment":
+                sentiment_label,
+
+            "VADER Score":
+                vader_score,
+
+            "Owner Name":
+                owner,
+
+            "Owner Email":
+                email,
+
+            "Status":
+                "Open",
+
+            "Source":
+                "YouTube",
+
+            "Video URL":
+                c.get("video_url", ""),
+
+            "Date":
+                c.get("date", ""),
+
+            "Original Comment":
+                c.get("text", ""),
         })
 
         next_sno += 1
-        print(f"  → {sentiment_label} | "
-              f"{analysis.get('fn_type','?')} | "
-              f"{analysis.get('model','?')[:20]} | "
-              f"{analysis.get('defect_summary','?')[:45]}")
 
-    print(f"\nNew rows created: {len(new_rows)}/{MAX_TOTAL}")
+        print(
+            f"  → {sentiment_label} | "
+            f"{analysis.get('fn_type', '?')} | "
+            f"{analysis.get('model', '?')[:20]} | "
+            f"{analysis.get('defect_summary', '?')[:45]}"
+        )
+
+    print(
+        f"\nNew rows created: "
+        f"{len(new_rows)}/{MAX_TOTAL}"
+    )
 
     if not new_rows:
         print("No new rows.")
@@ -843,45 +994,97 @@ if not all_comments:
 
     # 6 — Merge
     print("\n[6/7] Merging with existing data...")
-    df_new    = pd.DataFrame(new_rows)
+
+    df_new = pd.DataFrame(new_rows)
+
     new_start = len(old_df)
 
     if old_df is not None and not old_df.empty:
+
         for col in EXCEL_COLUMNS:
+
             if col not in old_df.columns:
                 old_df[col] = ""
+
         final_df = pd.concat(
-            [old_df[EXCEL_COLUMNS], df_new[EXCEL_COLUMNS]],
+            [
+                old_df[EXCEL_COLUMNS],
+                df_new[EXCEL_COLUMNS]
+            ],
             ignore_index=True
         )
+
     else:
-        final_df = df_new[EXCEL_COLUMNS].copy()
+
+        final_df = df_new[
+            EXCEL_COLUMNS
+        ].copy()
 
     # Safety dedup
-    final_df["_d"] = final_df["Original Comment"].apply(clean_text)
-    before         = len(final_df)
-    final_df.drop_duplicates(subset=["_d"], inplace=True)
-    final_df.drop(columns=["_d"], inplace=True)
-    final_df.reset_index(drop=True, inplace=True)
-    if before > len(final_df):
-        print(f"Safety dedup removed {before - len(final_df)} rows")
+    final_df["_d"] = final_df[
+        "Original Comment"
+    ].apply(clean_text)
 
-    final_df["S.No"] = range(1, len(final_df) + 1)
-    print(f"Total: {len(final_df)} rows "
-          f"({new_start} existing + {len(new_rows)} new)")
+    before = len(final_df)
+
+    final_df.drop_duplicates(
+        subset=["_d"],
+        inplace=True
+    )
+
+    final_df.drop(
+        columns=["_d"],
+        inplace=True
+    )
+
+    final_df.reset_index(
+        drop=True,
+        inplace=True
+    )
+
+    if before > len(final_df):
+
+        print(
+            f"Safety dedup removed "
+            f"{before - len(final_df)} rows"
+        )
+
+    final_df["S.No"] = range(
+        1,
+        len(final_df) + 1
+    )
+
+    print(
+        f"Total: {len(final_df)} rows "
+        f"({new_start} existing + "
+        f"{len(new_rows)} new)"
+    )
 
     # 7 — Save + Upload
-    print("\n[7/7] Saving and uploading to Google Drive...")
+    print(
+        "\n[7/7] Saving and uploading "
+        "to Google Drive..."
+    )
+
     save_excel(final_df, new_start)
+
     upload_to_onedrive()
+
     save_last_run()
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")
-    print(f"Total rows in Excel : {len(final_df)}")
-    print(f"New rows this run   : {len(new_rows)}")
+    print(
+        f"Total rows in Excel : "
+        f"{len(final_df)}"
+    )
+    print(
+        f"New rows this run   : "
+        f"{len(new_rows)}"
+    )
     print("=" * 60)
 
 
 if __name__ == "__main__":
+   
     main()
