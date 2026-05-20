@@ -726,13 +726,11 @@ def main():
             if v["video_id"] not in seen_videos
         ]
 
-        for video in new_vids:
+for video in new_vids:
+    seen_videos.add(video["video_id"])
+    comments = get_comments(video)
 
-            seen_videos.add(video["video_id"])
-
-            comments = get_comments(video)
-
-            filtered_comments = []
+    filtered_comments = []
 
             for c in comments:
 
