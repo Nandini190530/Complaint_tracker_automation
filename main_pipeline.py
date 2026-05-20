@@ -8,7 +8,7 @@ import pandas as pd
 warnings.filterwarnings("ignore")
 
 from googleapiclient.discovery import build
-from google import genai
+import google.generativeai as genai
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from gdrive_sync import download_from_onedrive, upload_to_onedrive
 
@@ -27,7 +27,7 @@ MAX_WORDS          = 150
 
 # ── APIS ─────────────────────────────────────────────────────────
 youtube       = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 analyzer      = SentimentIntensityAnalyzer()
 
 analyzer.lexicon.update({
@@ -504,10 +504,10 @@ def call_gemini_safe(c):
             # Wait before each call to respect rate limit
             time.sleep(5)
 
-            resp = gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt
-            )
+            model = genai.GenerativeModel("gemini-2.0-flash")
+
+   resp = model.generate_content(prompt)
+
             raw = resp.text.strip()
             raw = raw.replace("```json", "").replace("```", "").strip()
             s   = raw.find("{")
@@ -726,11 +726,13 @@ def main():
             if v["video_id"] not in seen_videos
         ]
 
-for video in new_vids:
-    seen_videos.add(video["video_id"])
-    comments = get_comments(video)
+        for video in new_vids:
 
-    filtered_comments = []
+            seen_videos.add(video["video_id"])
+
+            comments = get_comments(video)
+
+            filtered_comments = []
 
             for c in comments:
 
@@ -762,7 +764,6 @@ for video in new_vids:
             time.sleep(
                 random.uniform(0.5, 1.0)
             )
-
     print(
         f"\nKeyword-matched: {len(all_comments)} "
         f"from {len(seen_videos)} videos"
