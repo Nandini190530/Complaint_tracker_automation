@@ -499,38 +499,53 @@ def call_gemini_safe(c):
         group=c.get("keyword_group", "")
     )
 
-    for attempt in range(3):
-        try:
-            # Wait before each call to respect rate limit
+   for attempt in range(3):
+    try:
+        # Wait before each call to respect rate limit
+        time.sleep(5)
+
+        # Create Gemini model
+        model = genai.GenerativeModel("gemini-2.0-flash")
+
+        # Generate response
+        resp = model.generate_content(
+            prompt,
+            request_options={"timeout": 120}
+        )
+
+        # Clean response
+        raw = resp.text.strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+
+        # Extract JSON safely
+        s = raw.find("{")
+        e = raw.rfind("}") + 1
+
+        if s != -1 and e > s:
+            raw = raw[s:e]
+
+        # Return parsed JSON
+        return json.loads(raw)
+
+    except json.JSONDecodeError as je:
+        print(f"JSON parse error: {str(je)[:40]}")
+        time.sleep(3)
+
+    except Exception as ex:
+        err = str(ex)
+
+        if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+            print(f"Rate limit → waiting 60s (attempt {attempt + 1})")
+            time.sleep(60)
+
+        elif "500" in err or "503" in err:
+            print("Server error → waiting 15s")
+            time.sleep(15)
+
+        else:
+            print(f"Gemini error: {err[:60]}")
             time.sleep(5)
 
-            model = genai.GenerativeModel("gemini-2.0-flash")
-
-   resp = model.generate_content(prompt)
-
-            raw = resp.text.strip()
-            raw = raw.replace("```json", "").replace("```", "").strip()
-            s   = raw.find("{")
-            e   = raw.rfind("}") + 1
-            if s != -1 and e > s:
-                raw = raw[s:e]
-            return json.loads(raw)
-
-        except json.JSONDecodeError as je:
-            print(f"  JSON parse error: {str(je)[:40]}")
-            time.sleep(3)
-
-        except Exception as ex:
-            err = str(ex)
-            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
-                print(f"  Rate limit → waiting 60s (attempt {attempt+1})")
-                time.sleep(60)  # full minute for rate limit
-            elif "500" in err or "503" in err:
-                print(f"  Server error → waiting 15s")
-                time.sleep(15)
-            else:
-                print(f"  Gemini error: {err[:60]}")
-                time.sleep(5)
 
     return None  # all 3 attempts failed
 
